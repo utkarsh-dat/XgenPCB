@@ -1,0 +1,145 @@
+# Kubernetes Deployment - Backend API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pcb-backend
+  labels:
+    app: pcb-builder
+    component: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pcb-builder
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: pcb-builder
+        component: backend
+    spec:
+      containers:
+        - name: api
+          image: pcb-builder/backend:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: pcb-config
+            - secretRef:
+                name: pcb-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pcb-backend
+spec:
+  selector:
+    app: pcb-builder
+    component: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP
+---
+# Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pcb-frontend
+  labels:
+    app: pcb-builder
+    component: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pcb-builder
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: pcb-builder
+        component: frontend
+    spec:
+      containers:
+        - name: web
+          image: pcb-builder/frontend:latest
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pcb-frontend
+spec:
+  selector:
+    app: pcb-builder
+    component: frontend
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+# Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pcb-ingress
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+spec:
+  tls:
+    - hosts:
+        - pcbbuilder.ai
+        - api.pcbbuilder.ai
+      secretName: pcb-tls
+  rules:
+    - host: pcbbuilder.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pcb-frontend
+                port:
+                  number: 80
+    - host: api.pcbbuilder.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pcb-backend
+                port:
+                  number: 8000

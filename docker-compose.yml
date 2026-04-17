@@ -1,0 +1,97 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: pcb-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pcbbuilder}
+      POSTGRES_USER: ${POSTGRES_USER:-pcbbuilder}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pcbbuilder_dev}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/scripts/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pcbbuilder}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ───────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: pcb-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Elasticsearch ───────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: pcb-elasticsearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\\|yellow\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── MinIO (S3-compatible local storage) ─────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: pcb-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"  # Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── pgAdmin (Database management) ──────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pcb-pgadmin
+    restart: unless-stopped
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@pcbbuilder.ai
+      PGADMIN_DEFAULT_PASSWORD: admin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  es_data:
+  minio_data:

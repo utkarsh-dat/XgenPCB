@@ -1,0 +1,24 @@
+{
+  "name": "pcb-builder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "World-Class Autonomous PCB Builder with AI-powered design assistance",
+  "workspaces": [
+    "frontend/apps/*",
+    "frontend/packages/*"
+  ],
+  "scripts": {
+    "dev:frontend": "cd frontend/apps/web && npm run dev",
+    "dev:backend": "docker-compose up -d && cd backend && make dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build:frontend": "cd frontend/apps/web && npm run build",
+    "db:migrate": "cd backend && python -m scripts.migrate",
+    "db:seed": "cd backend && python -m scripts.seed",
+    "test:backend": "cd backend && pytest",
+    "test:frontend": "cd frontend/apps/web && npm test",
+    "lint": "concurrently \"cd backend && ruff check .\" \"cd frontend/apps/web && npm run lint\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
