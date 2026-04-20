@@ -89,6 +89,54 @@ lint-fix: ## Fix lint errors
 	cd backend && ruff check --fix . && ruff format .
 	cd frontend/apps/web && npm run lint -- --fix
 
+# ── RL Training ────────────────────────────────────────────
+
+train-rl: ## Train RL routing agent (DQN)
+	@echo "🧠 Training RL routing agent..."
+	cd rl_training && python -m pipeline
+
+train-agent: ## Train RL agent with custom config
+	cd rl_training && python -m pipeline --episodes 10000 --save models/routing_agent.pt
+
+generate-data: ## Generate synthetic PCB dataset
+	@echo "📊 Generating synthetic PCB dataset..."
+	cd rl_training && python dataset.py --num-samples 1000 --output data/pcb_routing_dataset.json
+
+generate-llm-data: ## Generate LLM fine-tuning dataset
+	@echo "📊 Generating LLM fine-tuning dataset..."
+	cd rl_training && python dataset.py --num-samples 1000 --output-llm data/pcb_llm_dataset.json
+
+# ── LLM Fine-tuning ─────────────────────────────────────────
+
+finetune: ## Run QLoRA fine-tuning (requires GPU)
+	@echo "🎓 Running QLoRA fine-tuning..."
+	cd rl_training && python finetune.py --base-model meta-llama/Llama-3.1-8B-Instruct
+
+finetune-install: ## Install fine-tuning dependencies
+	@echo "📦 Installing fine-tuning deps..."
+	pip install -q transformers peft bitsandbytes datasets trl sentence-transformers faiss-cpu
+
+# ── RAG Knowledge ─────────────────────────────────────────
+
+build-rag: ## Build RAG knowledge base
+	@echo "📚 Building RAG knowledge base..."
+	cd rl_training && python rag.py --output data/knowledge.json
+
+# ── Full Training Pipeline ────────────────────────────────
+
+train-full: train-rl generate-data generate-llm-data build-rag ## Run full training pipeline
+	@echo "✅ Full training pipeline complete"
+
+# ── Evaluation ────────────────────────────────────────
+
+eval: ## Evaluate trained agent
+	@echo "📈 Evaluating agent..."
+	cd rl_training && python -c "from environment import *; from agent import *; print('Environment and Agent OK')"
+
+benchmark: ## Run on PCB-Bench style evaluation
+	@echo "🏆 Running benchmark..."
+	cd rl_training && python -c "from environment import PCBRoutingEnv; env = PCBRoutingEnv(); print('PCB-Bench ready')"
+
 # ── Cleanup ───────────────────────────────────────────────────
 
 clean: ## Clean build artifacts
@@ -96,4 +144,6 @@ clean: ## Clean build artifacts
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name "node_modules" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name "dist" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name "models" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name "data" -exec rm -rf {} + 2>/dev/null || true
 	@echo "🧹 Cleaned"

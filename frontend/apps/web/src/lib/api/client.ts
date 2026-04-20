@@ -2,6 +2,8 @@
  * PCB Builder - API Client
  */
 
+import type { Project } from '../../stores';
+
 const API_BASE = '/api/v1';
 
 class ApiClient {
@@ -44,9 +46,11 @@ class ApiClient {
     return this.request('/auth/me');
   }
 
-  // Projects
-  listProjects() {
-    return this.request('/projects/');
+  // Projects - returns list or wraps in {items}
+  async listProjects() {
+    const data = await this.request<Project[] | { items: Project[] }>('/projects/');
+    if (Array.isArray(data)) return { items: data };
+    return data;
   }
 
   createProject(data: { name: string; description?: string }) {
@@ -109,8 +113,20 @@ class ApiClient {
     return this.request(`/eda/job/${jobId}`);
   }
 
-  searchComponents(data: { query: string; category?: string; limit?: number }) {
-    return this.request('/eda/components/search', { method: 'POST', body: JSON.stringify(data) });
+  searchComponents(data: { q: string; category?: string; distributor?: string; limit?: number }) {
+    return this.request('/components/search', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  getComponentCategories() {
+    return this.request('/components/categories');
+  }
+
+  getFootprints(packageType: string) {
+    return this.request(`/components/footprints/${packageType}`);
+  }
+
+  getComponentDetails(componentId: string) {
+    return this.request(`/components/${componentId}`);
   }
 
   // Fabrication

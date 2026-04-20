@@ -1,0 +1,21 @@
+{
+  "$schema": "https://openapi.dev/schemas/v1.json",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "routes": [
+    {
+      "handle": "filesystem"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
+  "env": {
+    "VITE_API_URL": "@xgenpcb_api_url",
+    "VITE_WS_URL": "@xgenpcb_ws_url"
+  }
+}

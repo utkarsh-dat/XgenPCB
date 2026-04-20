@@ -1,3 +1,6 @@
+# ============================================
+# XgenPCB - Backend Production Dockerfile
+# ============================================
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -6,21 +9,29 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY pyproject.toml .
-RUN pip install --no-cache-dir -e ".[ai]"
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
 
-# Copy application code
+# Copy and install dependencies
+COPY pyproject.toml uv.lock ./
+RUN uv pip install --system --no-cache -e ".[ai]"
+
+# Copy application
 COPY . .
+
+# Create data directory
+RUN mkdir -p /app/data
 
 # Expose port
 EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/health')" || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Run with uvicorn
-CMD ["uvicorn", "services.gateway.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["uvicorn", "services.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]

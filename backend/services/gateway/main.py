@@ -50,12 +50,14 @@ from services.project_service.routes import router as project_router
 from services.ai_service.routes import router as ai_router
 from services.eda_service.routes import router as eda_router
 from services.fab_service.routes import router as fab_router
+from services.component_service.routes import router as component_router
 
 app.include_router(user_router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(project_router, prefix="/api/v1/projects", tags=["Projects & Designs"])
 app.include_router(ai_router, prefix="/api/v1/ai", tags=["AI Services"])
 app.include_router(eda_router, prefix="/api/v1/eda", tags=["EDA Services"])
 app.include_router(fab_router, prefix="/api/v1/fab", tags=["Fabrication"])
+app.include_router(component_router, prefix="/api/v1/components", tags=["Components"])
 
 
 @app.get("/", tags=["Health"])

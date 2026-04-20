@@ -47,3 +47,4 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+scripts/setup.sh

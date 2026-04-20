@@ -246,7 +246,7 @@ class UsageLog(Base):
     resource_type: Mapped[Optional[str]] = mapped_column(String(100))
     resource_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     quantity: Mapped[int] = mapped_column(Integer, default=1)
-    metadata: Mapped[dict] = mapped_column(JSONB, default=dict)
+    extra_data: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

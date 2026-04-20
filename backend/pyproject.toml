@@ -43,8 +43,7 @@ ai = [
     "sentence-transformers>=2.6.1",
 ]
 rl = [
-    "jax[tpu]>=0.4.25",
-    "haiku>=0.0.12",
+    "jax>=0.4.25",
     "optax>=0.2.2",
     "orbax-checkpoint>=0.5.10",
     "gymnasium>=0.29.1",

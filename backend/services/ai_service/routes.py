@@ -1,12 +1,22 @@
 """
 PCB Builder - AI Service Routes
 LLM integration for intent parsing, design review, auto-fix, and chat.
+
+Enhanced with:
+- RAG knowledge base integration
+- Domain-adapted prompts (PCB-Bench style)
+- Feedback collection for fine-tuning
 """
 
 import json
+import os
 import time
+import uuid
+from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 
@@ -25,9 +35,47 @@ from shared.schemas import (
 settings = get_settings()
 router = APIRouter()
 
+# RAG Knowledge Base (lazy loaded)
+_rag_kb = None
 
-async def call_llm(system_prompt: str, user_message: str, json_mode: bool = False) -> dict:
-    """Call the LLM API and return the response."""
+
+def get_rag_kb():
+    """Get RAG knowledge base instance."""
+    global _rag_kb
+    if _rag_kb is None:
+        try:
+            from rl_training.rag import make_rag_knowledge_base
+            kb_path = Path("data/knowledge.json")
+            if kb_path.exists():
+                _rag_kb = make_rag_knowledge_base(knowledge_file=kb_path)
+            else:
+                _rag_kb = make_rag_knowledge_base()
+        except ImportError:
+            pass
+    return _rag_kb
+
+
+def _get_domain_context(query: str) -> str:
+    """Get RAG context for query."""
+    kb = get_rag_kb()
+    if kb is None:
+        return ""
+    return kb.get_context(query, max_length=500)
+
+
+async def call_llm(
+    system_prompt: str,
+    user_message: str,
+    json_mode: bool = False,
+    use_rag: bool = False,
+) -> dict:
+    """Call the LLM API with optional RAG enhancement."""
+    # Add RAG context if enabled
+    if use_rag:
+        rag_context = _get_domain_context(user_message)
+        if rag_context:
+            user_message = f"{user_message}\n\nRelevant PCB knowledge:\n{rag_context}"
+
     if not settings.openai_api_key:
         raise HTTPException(status_code=503, detail="LLM API key not configured")
 
@@ -67,7 +115,12 @@ async def call_llm(system_prompt: str, user_message: str, json_mode: bool = Fals
 
 # ━━ Intent Parsing ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-INTENT_SYSTEM_PROMPT = """You are an expert PCB design assistant.
+INTENT_SYSTEM_PROMPT = """You are an expert PCB design assistant with deep knowledge of:
+- PCB layout best practices (IPC standards)
+- Component placement rules
+- High-speed routing guidelines
+- Design for manufacturing
+
 Parse the user's natural language into a structured action with parameters.
 
 Available actions:
@@ -78,6 +131,12 @@ Available actions:
 - run_drc: Run design rule check (params: rules?)
 - auto_route: Trigger automatic routing (params: nets?, strategy?)
 - fix_violation: Fix a DRC violation (params: violation_id?, auto?)
+
+Key PCB design knowledge:
+- Decoupling capacitors (0.1uF) should be within 2mm of VCC pins
+- High-speed traces need 45-degree corners, not 90-degree
+- Minimum trace width: 0.15mm for signal, 0.3mm for power
+- Maintain 2W rule: 2mil per 1A current for 1oz copper
 
 Respond with JSON:
 {"action_type": "...", "parameters": {...}, "confidence": 0.0-1.0, "explanation": "..."}
@@ -262,3 +321,108 @@ async def design_review(
     )
 
     return json.loads(result["content"])
+
+
+# ━━ Feedback Collection ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FEEDBACK_SYSTEM_PROMPT = """You are an expert PCB design assistant.
+Collect feedback on AI suggestions to improve the model over time.
+
+When users provide feedback:
+- thumbs_up: The suggestion was helpful/correct
+- thumbs_down: The suggestion was incorrect or unhelpful
+- modified: The suggestion was used but modified
+
+Categorize and store for fine-tuning."""
+
+
+class FeedbackRequest(BaseModel):
+    generation_id: uuid.UUID
+    feedback: str  # "thumbs_up", "thumbs_down", "modified"
+    comment: Optional[str] = None
+    corrected_output: Optional[dict] = None
+
+
+class FeedbackResponse(BaseModel):
+    status: str
+    stored_for_finetuning: bool
+
+
+@router.post("/feedback", response_model=FeedbackResponse)
+async def submit_feedback(
+    request: FeedbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Collect user feedback on AI suggestions for fine-tuning."""
+    # Look up the original generation
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(AIGeneration).where(AIGeneration.id == request.generation_id)
+    )
+    gen = result.scalar_one_or_none()
+
+    if not gen:
+        raise HTTPException(status_code=404, detail="Generation not found")
+
+    # Update with feedback
+    feedback_entry = {
+        "feedback": request.feedback,
+        "comment": request.comment,
+        "corrected_output": request.corrected_output,
+        "user_id": str(current_user.id),
+    }
+
+    # Store feedback (append to existing metadata)
+    existing_feedback = gen.output_data.get("feedback", [])
+    if isinstance(existing_feedback, list):
+        existing_feedback.append(feedback_entry)
+    else:
+        existing_feedback = [feedback_entry]
+
+    gen.output_data["feedback"] = existing_feedback
+    await db.commit()
+
+    # Could trigger retraining when enough feedback accumulated
+    return FeedbackResponse(
+        status="stored",
+        stored_for_finetuning=True,
+    )
+
+
+# ━━ Export Feedback for Fine-tuning ━━━━━━━━━━━━━━━━━━━━━━━━
+
+@router.post("/export-feedback")
+async def export_feedback_for_finetuning(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export accumulated feedback for fine-tuning dataset."""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(AIGeneration).where(
+            AIGeneration.output_data.contains("feedback")
+        )
+    )
+    generations = result.scalars().all()
+
+    # Extract feedback examples
+    examples = []
+    for gen in generations:
+        feedback_data = gen.output_data.get("feedback", [])
+        if isinstance(feedback_data, list):
+            for fb in feedback_data:
+                if fb.get("feedback") in ["thumbs_down", "modified"] and fb.get("corrected_output"):
+                    examples.append({
+                        "instruction": f"Correct this PCB design action: {gen.input_prompt}",
+                        "output": json.dumps(fb["corrected_output"]),
+                        "original": gen.output_data.get("response"),
+                        "feedback": fb.get("feedback"),
+                    })
+
+    return {
+        "count": len(examples),
+        "examples": examples[:100],  # Limit response size
+    }
