@@ -237,4 +237,85 @@ Component pricing reflects static models and may not reflect real-time distribut
 
 ---
 
+## Quick Start (Clone-Free)
+
+XgenPCB is now fully autonomous. You no longer need to clone the repository or manually configure Docker to get started.
+
+### 1. Installation
+```bash
+pip install xgenpcb
+```
+
+### 2. Run the Agent
+Simply type the command below. The CLI will automatically detect if you have a backend running; if not, it will offer to set up a local Docker backend for you!
+```bash
+xgenpcb
+```
+
+### 3. Configuration
+When you first run the agent, it will look for an `NVIDIA_API_KEY` in your environment or a local `.env` file. You can also set it directly in the TUI.
+
+---
+
+## Manual Backend Setup (Optional)
+If you prefer to manage the infrastructure yourself:
+```bash
+docker-compose up -d
+```
+
+### 3. Run Database Migrations
+```bash
+docker-compose run backend python -m shared.database init
+```
+
+### 4. Start Application
+```bash
+docker-compose up -d backend frontend
+```
+
+### 5. Generate a PCB
+
+**Using text description:**
+```bash
+curl -X POST http://localhost:8000/api/v1/ai/generate-pcb \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-token>" \
+  -d '{
+    "input_type": "text",
+    "description": "USB-C to ESP32 module with 3.3V regulator, 2 LEDs, and reset button"
+  }'
+```
+
+**Using BOM + netlist:**
+```bash
+curl -X POST http://localhost:8000/api/v1/ai/generate-pcb \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_type": "bom_netlist",
+    "components": [
+      {"id": "U1", "name": "ESP32", "mpn": "ESP32-WROOM-32", "footprint": "QFN-48"},
+      {"id": "U2", "name": "REG", "mpn": "AMS1117-3.3", "footprint": "SOT-223"},
+      {"id": "C1", "name": "C1", "footprint": "0805"}
+    ],
+    "nets": [
+      {"name": "VCC", "pins": [{"component_id": "U1", "pin": "VCC"}, {"component_id": "U2", "pin": "VOUT"}]}
+    ]
+  }'
+```
+
+### 6. Export Files
+```bash
+# Generate Gerbers
+curl -X POST http://localhost:8000/api/v1/eda/generate-gerber?design_id=<id>
+
+# Generate STEP 3D model
+curl -X POST http://localhost:8000/api/v1/eda/export-step?design_id=<id>
+```
+
+### 7. Access UI
+- Frontend: http://localhost:8080
+- API Docs: http://localhost:8000/docs
+
+---
+
 **License:** Proprietary — All rights reserved.

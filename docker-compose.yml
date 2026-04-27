@@ -1,8 +1,6 @@
 # ============================================
 # XgenPCB - Production Docker Compose
-# World-Class Infrastructure
-# ============================================
-version: "3.9"
+# ====================================
 
 services:
   # ── PostgreSQL ──────────────────────────────────────────────
@@ -11,15 +9,15 @@ services:
     container_name: xgenpcb-postgres
     restart: unless-stopped
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "5432:5432"
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: pcbbuilder
+      POSTGRES_USER: pcbbuilder
+      POSTGRES_PASSWORD: pcbbuilder_dev
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U pcbbuilder"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -30,174 +28,36 @@ services:
     container_name: xgenpcb-redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD}
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ── Celery Worker ───────────────────────────────────────────
-  celery:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: xgenpcb-celery
-    restart: unless-stopped
-    command: celery -A shared.celery worker --loglevel=info
-    depends_on:
-      - redis
-      - postgres
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-    volumes:
-      - ./data:/app/data
-
-  # ── MinIO (S3 Storage) ────────────────────────────────────────
-  minio:
-    image: minio/minio:latest
-    container_name: xgenpcb-minio
-    restart: unless-stopped
-    ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
-    volumes:
-      - minio_data:/data
-    command: server /data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
   # ── Backend ─────────────────────────────────────────────────
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: xgenpcb-backend
     container_name: xgenpcb-backend
     restart: unless-stopped
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://pcbbuilder:pcbbuilder_dev@postgres:5432/pcbbuilder
+      - REDIS_URL=redis://redis:6379/0
+      - APP_ENV=development
+      - LOCAL_STORAGE_PATH=/app/storage/designs
+    volumes:
+      - ./backend:/app
+      - ./storage:/app/storage
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-      - S3_ENDPOINT=http://minio:9000
-      - S3_BUCKET=${S3_BUCKET}
-      - S3_ACCESS_KEY=${MINIO_USER}
-      - S3_SECRET_KEY=${MINIO_PASSWORD}
-      - JWT_SECRET=${JWT_SECRET}
-      - APP_ENV=production
-      - APP_DEBUG=false
-    volumes:
-      - ./data:/app/data
-
-  # ── Frontend ────────────────────────────────────────────────
-  frontend:
-    build:
-      context: ./frontend/apps/web
-      dockerfile: Dockerfile
-    container_name: xgenpcb-frontend
-    restart: unless-stopped
-    ports:
-      - "${FRONTEND_PORT:-8080}:80"
-    depends_on:
-      - backend
-    environment:
-      - VITE_API_URL=http://localhost:8000
-
-  # ═══════════════════════════════════════════════════════════
-  # OBSERVABILITY STACK
-  # ═══════════════════════════════════════════════════════════
-
-  # ── Prometheus ───────────────────────────────────────────────
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: xgenpcb-prometheus
-    restart: unless-stopped
-    ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
-    volumes:
-      - ./infra/prometheus:/etc/prometheus
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-    profiles:
-      - monitoring
-
-  # ── Grafana ────────────────────────────────────────────────
-  grafana:
-    image: grafana/grafana:latest
-    container_name: xgenpcb-grafana
-    restart: unless-stopped
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards
-      - ./infra/grafana/datasources:/etc/grafana/provisioning/datasources
-    profiles:
-      - monitoring
-    depends_on:
-      - prometheus
-
-  # ── Loki (Log Aggregation) ────────────────────────────────
-  loki:
-    image: grafana/loki:latest
-    container_name: xgenpcb-loki
-    restart: unless-stopped
-    ports:
-      - "${LOKI_PORT:-3100}:3100"
-    volumes:
-      - loki_data:/loki
-    profiles:
-      - monitoring
-
-  # ── Promtail (Log Shipper) ────────────────────────────────
-  promtail:
-    image: grafana/promtail:latest
-    container_name: xgenpcb-promtail
-    restart: unless-stopped
-    volumes:
-      - ./logs:/var/log/xgenpcb
-      - ./infra/promtail:/etc/promtail
-    depends_on:
-      - loki
-    profiles:
-      - monitoring
-
-  # ── node-exporter (System Metrics) ───────────────────────────────
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: xgenpcb-node-exporter
-    restart: unless-stopped
-    ports:
-      - "${NODE_EXPORTER_PORT:-9100}:9100"
-    profiles:
-      - monitoring
 
 volumes:
   postgres_data:
   redis_data:
-  minio_data:
-  prometheus_data:
-  grafana_data:
-  loki_data:

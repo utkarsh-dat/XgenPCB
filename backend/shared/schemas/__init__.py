@@ -135,6 +135,94 @@ class DesignResponse(BaseModel):
 
 
 # ━━ AI ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ── PCB Generation Input Types ────────────────────────────────
+
+class PlainTextInput(BaseModel):
+    """Plain English text description."""
+    description: str = Field(min_length=10, max_length=10000)
+
+
+class BOMNetlistInput(BaseModel):
+    """Bill of Materials + Netlist spreadsheet data."""
+    components: list[dict] = Field(min_length=1)
+    nets: list[dict] = Field(min_length=1)
+
+
+class ExistingDesignInput(BaseModel):
+    """Existing KiCad/schematic file to convert."""
+    file_type: str = Field(description="kicad_sch, kicad_pcb, eagle, altium")
+    file_content: str = Field(description="Base64 encoded file content or file URL")
+
+
+# ── PCB Generation Request ────────────────────────────────
+
+class PCBGenerationInput(BaseModel):
+    """Input for PCB generation - supports 3 input types."""
+    input_type: str = Field(description="text, bom_netlist, existing_design")
+    
+    # For text input
+    description: Optional[str] = None
+    
+    # For BOM+netlist input
+    components: Optional[list[dict]] = None
+    nets: Optional[list[dict]] = None
+    
+    # For existing design conversion
+    file_type: Optional[str] = None
+    file_url: Optional[str] = None
+    
+    # Generation options
+    board_config: Optional[BoardConfig] = None
+    auto_route: bool = True
+    generate_3d_model: bool = True
+
+
+class ComponentPlacement(BaseModel):
+    """Placed component with position."""
+    id: str
+    name: str
+    mpn: Optional[str] = None
+    footprint: str
+    x: float
+    y: float
+    rotation: float = 0.0
+    layer: str = "F"
+
+
+class NetConnection(BaseModel):
+    """Net connection between pins."""
+    name: str
+    pins: list[dict]  # [{"component_id": str, "pin": str}, ...]
+
+
+class PCBGenerationOutput(BaseModel):
+    """Output from PCB generation."""
+    design_id: Optional[uuid.UUID] = None
+    
+    # Board definition
+    board_config: dict
+    
+    # Placed components
+    placed_components: list[ComponentPlacement]
+    
+    # Routed nets
+    nets: list[NetConnection]
+    tracks: list[dict]  # [{"start": [x,y], "end": [x,y], "width": float, "layer": str}, ...]
+    vias: list[dict]  # [{"x": float, "y": float, "from_layer": int, "to_layer": int}, ...]
+    
+    # Generation metadata
+    generation_time_ms: int
+    tokens_used: int
+    
+    # Output files
+    gerber_zip_url: Optional[str] = None
+    step_model_url: Optional[str] = None
+    
+    # Warnings/Issues
+    warnings: list[str] = []
+    
+    model_config = {"from_attributes": True}
+
 
 class IntentRequest(BaseModel):
     user_input: str = Field(min_length=1, max_length=2000)
@@ -143,6 +231,47 @@ class IntentRequest(BaseModel):
         "place_component", "route_net", "add_constraint",
         "generate_bom", "run_drc", "auto_route", "fix_violation",
     ]
+
+
+# ━━ PCB Generation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class PCBGenerateRequest(BaseModel):
+    """Request to generate a complete PCB design."""
+    input_type: str = Field(description="text, bom_netlist, existing_design")
+    
+    # For text input
+    description: Optional[str] = None
+    
+    # For BOM+netlist input
+    components: Optional[list[dict]] = None
+    nets: Optional[list[dict]] = None
+    
+    # For existing design conversion
+    file_type: Optional[str] = None
+    file_url: Optional[str] = None
+    
+    # Generation options
+    board_config: Optional[BoardConfig] = None
+    auto_route: bool = True
+    generate_3d_model: bool = True
+
+
+class PCBGenerateResponse(BaseModel):
+    """Response with generated PCB design."""
+    design_id: uuid.UUID
+    board_config: dict
+    pcb_layout: dict
+    
+    # Generation metadata
+    generation_time_ms: int
+    tokens_used: int
+    
+    # Output files (URLs if requested)
+    gerber_url: Optional[str] = None
+    step_url: Optional[str] = None
+    
+    # Warnings from generation
+    warnings: list[str] = []
 
 
 class IntentResult(BaseModel):

@@ -41,15 +41,10 @@ class Settings(BaseSettings):
         )
 
     # ── Redis ────────────────────────────────────────────────
-    redis_host: str = "localhost"
+    redis_host: str = "redis"
     redis_port: int = 6379
     redis_password: str = ""
-
-    @property
-    def redis_url(self) -> str:
-        if self.redis_password:
-            return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}"
-        return f"redis://{self.redis_host}:{self.redis_port}"
+    redis_url: str = "redis://redis:6379/0"
 
     # ── Auth ─────────────────────────────────────────────────
     jwt_secret: str = "dev-secret-change-in-production"
@@ -63,12 +58,22 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o"
     embedding_model: str = "text-embedding-3-small"
 
+    # ── NVIDIA NIM ────────────────────────────────────────────
+    nvidia_api_key: str = ""
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    nvidia_model: str = "nvidia/llama-3.1-nemotron-70b-instruct"
+
     # ── S3 / Object Storage ──────────────────────────────────
     s3_bucket: str = "pcb-builder-assets"
     s3_region: str = "ap-south-1"
-    s3_endpoint_url: Optional[str] = "http://localhost:9000"  # MinIO for dev
+    s3_endpoint_url: Optional[str] = "http://localhost:9000"
     aws_access_key_id: str = "minioadmin"
     aws_secret_access_key: str = "minioadmin"
+
+    # ── Local Storage ────────────────────────────────────────
+    local_storage_path: str = "./storage/designs"
+
+    # Storage path for designs
 
     # ── Stripe ───────────────────────────────────────────────
     stripe_secret_key: str = ""
@@ -95,7 +100,7 @@ class Settings(BaseSettings):
     def elasticsearch_url(self) -> str:
         return f"http://{self.elasticsearch_host}:{self.elasticsearch_port}"
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "case_sensitive": False}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "case_sensitive": False, "extra": "ignore"}
 
 
 @lru_cache()

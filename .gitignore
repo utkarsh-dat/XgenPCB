@@ -30,6 +30,8 @@ postgres_data/
 redis_data/
 es_data/
 minio_data/
+storage
+docs
 
 # Logs
 *.log
@@ -43,9 +45,10 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
-
+tests
 # Temporary
 tmp/
 temp/
 *.tmp
 scripts/setup.sh
+tools

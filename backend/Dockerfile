@@ -1,26 +1,44 @@
-# ============================================
-# XgenPCB - Backend Production Dockerfile
-# ============================================
-FROM python:3.11-slim
+FROM ubuntu:22.04
 
 WORKDIR /app
 
+# Prevent interactive prompts during apt install
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    gnupg2 \
+    ca-certificates \
+    curl \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && add-apt-repository -y ppa:kicad/kicad-9.0-releases \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3.11-distutils \
     build-essential \
     libpq-dev \
-    curl \
+    kicad \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
+# Install pip for Python 3.11
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
 
-# Copy and install dependencies
-COPY pyproject.toml uv.lock ./
-RUN uv pip install --system --no-cache -e ".[ai]"
+# Set python3.11 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+    && update-alternatives --set python3 /usr/bin/python3.11
 
-# Copy application
+# Install Python dependencies with compatible versions
+RUN python3.11 -m pip install --no-cache-dir aiosqlite psycopg2-binary 'bcrypt>=4.0.1' 'passlib[bcrypt]>=1.7.4'
+
+# Copy requirements first (for better caching)
+COPY pyproject.toml ./
+
+# Install dependencies using pip
+RUN python3.11 -m pip install --no-cache-dir -e .
+
+# Copy application source
 COPY . .
 
 # Create data directory

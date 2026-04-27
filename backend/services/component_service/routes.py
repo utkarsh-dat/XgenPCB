@@ -227,25 +227,7 @@ async def search_components(
     )
 
 
-@router.get("/{component_id}")
-async def get_component(component_id: str):
-    """Get detailed component information."""
-    jlc_client, lcsc_client, kicad_client, fallback = _get_clients()
-    
-    # Try JLCPCB first
-    try:
-        component = await jlc_client.get_part(component_id)
-        if component:
-            return asdict(component)
-    except Exception:
-        pass
-    
-    # Fallback to search by MPN
-    fallback_comp = fallback.get_by_mpn(component_id)
-    if fallback_comp:
-        return fallback_comp
-    
-    raise HTTPException(status_code=404, detail="Component not found")
+
 
 
 @router.get("/categories")
@@ -296,6 +278,26 @@ async def get_footprints(
         }
     except Exception:
         return {"package": package_type, "footprints": [], "error": "API unavailable"}
+
+@router.get("/{component_id}")
+async def get_component(component_id: str):
+    """Get detailed component information."""
+    jlc_client, lcsc_client, kicad_client, fallback = _get_clients()
+    
+    # Try JLCPCB first
+    try:
+        component = await jlc_client.get_part(component_id)
+        if component:
+            return asdict(component)
+    except Exception:
+        pass
+    
+    # Fallback to search by MPN
+    fallback_comp = fallback.get_by_mpn(component_id)
+    if fallback_comp:
+        return fallback_comp
+    
+    raise HTTPException(status_code=404, detail="Component not found")
 
 
 # ── Health Check ───────────────────────────────────────────

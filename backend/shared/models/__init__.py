@@ -88,6 +88,8 @@ class Design(Base):
     constraints: Mapped[dict] = mapped_column(JSONB, default=dict)
     version: Mapped[int] = mapped_column(Integer, default=1)
     parent_design_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("designs.id", ondelete="SET NULL"))
+    local_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    minio_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
