@@ -86,6 +86,7 @@ class Design(Base):
     schematic_data: Mapped[dict] = mapped_column(JSONB, default=dict)
     pcb_layout: Mapped[dict] = mapped_column(JSONB, default=dict)
     constraints: Mapped[dict] = mapped_column(JSONB, default=dict)
+    design_reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     parent_design_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("designs.id", ondelete="SET NULL"))
     local_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
@@ -279,3 +280,36 @@ class AuditLog(Base):
     ip_address: Mapped[Optional[str]] = mapped_column(INET)
     user_agent: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    job_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="queued")
+    progress: Mapped[float] = mapped_column(Numeric(5, 2), default=0.0)
+    input_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    output_data: Mapped[Optional[dict]] = mapped_column(JSONB)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    traceback: Mapped[Optional[str]] = mapped_column(Text)
+    stage: Mapped[Optional[str]] = mapped_column(String(100))
+    retries: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IdempotencyKey(Base):
+    __tablename__ = "idempotency_keys"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_status: Mapped[int] = mapped_column(Integer, nullable=False)
+    response_body: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

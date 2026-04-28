@@ -1,9 +1,15 @@
-FROM ubuntu:22.04
+# ============================================
+# XgenPCB Backend - Production Dockerfile
+# ============================================
+FROM ubuntu:22.04 AS base
 
 WORKDIR /app
 
 # Prevent interactive prompts during apt install
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gnupg2 \
     ca-certificates \
     curl \
+    git \
     && add-apt-repository -y ppa:deadsnakes/ppa \
     && add-apt-repository -y ppa:kicad/kicad-9.0-releases \
     && apt-get update && apt-get install -y --no-install-recommends \
@@ -29,20 +36,36 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
     && update-alternatives --set python3 /usr/bin/python3.11
 
-# Install Python dependencies with compatible versions
-RUN python3.11 -m pip install --no-cache-dir aiosqlite psycopg2-binary 'bcrypt>=4.0.1' 'passlib[bcrypt]>=1.7.4'
+# Production stage
+FROM base AS production
 
-# Copy requirements first (for better caching)
-COPY pyproject.toml ./
+WORKDIR /app
 
-# Install dependencies using pip
-RUN python3.11 -m pip install --no-cache-dir -e .
+# Create non-root user
+RUN groupadd -r xgenpcb && useradd -r -g xgenpcb xgenpcb
+
+# Copy requirements first for better caching
+COPY backend/pyproject.toml ./
+
+# Install dependencies
+RUN python3.11 -m pip install --no-cache-dir \
+    fastapi uvicorn[standard] sqlalchemy[asyncio] asyncpg pydantic pydantic-settings \
+    python-jose[cryptography] passlib[bcrypt] python-multipart httpx redis \
+    boto3 stripe celery slowapi python-dotenv alembic tenacity structlog orjson \
+    email-validator aiosqlite psycopg2-binary 'bcrypt>=4.0.1'
 
 # Copy application source
-COPY . .
+COPY backend/ ./
 
-# Create data directory
-RUN mkdir -p /app/data
+# Make startup script executable
+RUN chmod +x start.sh
+
+# Create necessary directories
+RUN mkdir -p /app/storage/designs /app/data /app/logs \
+    && chown -R xgenpcb:xgenpcb /app
+
+# Switch to non-root user
+USER xgenpcb
 
 # Expose port
 EXPOSE 8000
@@ -51,5 +74,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run with uvicorn
-CMD ["uvicorn", "services.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run startup script (init DB + start server)
+CMD ["bash", "start.sh"]

@@ -11,23 +11,19 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from shared.config import get_settings
 from shared.database import get_db
 from shared.middleware.auth import get_current_user
-from shared.models import Component, Design, User
-from shared.schemas import ComponentResponse, ComponentSearch, DRCRequest, DRCResult
-
-import redis
-import json
+from shared.middleware.rate_limit import limiter
+from shared.models import Component, Design, Job, User
+from shared.schemas import ComponentResponse, ComponentSearch, DRCRequest, DRCResult, JobResponse
 
 settings = get_settings()
 router = APIRouter()
-
-# Redis for job tracking
-redis_client = redis.from_url(settings.redis_url, decode_responses=True)
 
 
 def write_kicad_schematic(project_dir: Path, schematic_data: dict) -> Path:
@@ -350,92 +346,61 @@ def _builtin_drc(board_config: dict, pcb_layout: dict, rules: dict) -> list[dict
 # ━━ Gerber Generation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 @router.post("/generate-gerber")
+@limiter.limit("10/minute")
 async def generate_gerber(
+    request: Request,
     design_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate Gerber files for fabrication (async)."""
-    from sqlalchemy import select
-
+    """Generate Gerber files for fabrication (queued as Celery task)."""
     result = await db.execute(select(Design).where(Design.id == design_id))
     design = result.scalar_one_or_none()
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
 
-    job_id = str(uuid.uuid4())
-    job_state = {"status": "processing", "progress": 0.0}
-    redis_client.setex(f"eda_job:{job_id}", 3600, json.dumps(job_state))
+    job_id = uuid.uuid4()
+    job = Job(
+        id=job_id,
+        user_id=current_user.id,
+        job_type="gerber_generation",
+        status="queued",
+        progress=0.0,
+        input_data={"design_id": str(design_id)},
+        stage="queued",
+        retries=0,
+        max_retries=2,
+    )
+    db.add(job)
+    await db.commit()
 
-    background_tasks.add_task(_generate_gerber_task, design, job_id)
+    from services.eda_service.tasks import generate_gerber_task
+    generate_gerber_task.delay(str(job_id), str(design_id))
 
-    return {"job_id": job_id, "status": "processing"}
-
-
-async def _generate_gerber_task(design: Design, job_id: str):
-    """Background Gerber generation."""
-    try:
-        def update_progress(p: float, extra=None):
-            state = {"status": "processing", "progress": p}
-            if extra: state.update(extra)
-            redis_client.setex(f"eda_job:{job_id}", 3600, json.dumps(state))
-
-        update_progress(0.2)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_path = Path(tmpdir) / "design"
-            project_path.mkdir()
-
-            # ── Footprint Library Link ──────────────────────────
-            global_table = Path("/app/fp-lib-table")
-            if global_table.exists():
-                shutil.copy(global_table, project_path / "fp-lib-table")
-            # ──────────────────────────────────────────────────
-
-            write_kicad_board(project_path, design.board_config, design.pcb_layout)
-            update_progress(0.5)
-
-            gerber_dir = project_path / "gerber"
-            gerber_dir.mkdir()
-
-            try:
-                proc = subprocess.run(
-                    [
-                        "kicad-cli", "pcb", "export", "gerbers",
-                        "--output", str(gerber_dir),
-                        str(project_path / "design.kicad_pcb"),
-                    ],
-                    capture_output=True, text=True, timeout=120,
-                )
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                for layer in ["F_Cu", "B_Cu", "F_SilkS", "B_SilkS", "Edge_Cuts", "F_Mask", "B_Mask"]:
-                    (gerber_dir / f"design-{layer}.gbr").write_text(
-                        f"G04 PCB Builder Gerber - {layer}*\nM02*\n"
-                    )
-
-            update_progress(0.8)
-
-            # Create zip
-            zip_path = shutil.make_archive(str(project_path / "gerber_output"), "zip", str(gerber_dir))
-            
-            update_progress(1.0, {
-                "status": "completed",
-                "result": {"gerber_path": zip_path, "layers_generated": len(list(gerber_dir.glob("*.gbr")))},
-            })
-
-    except Exception as e:
-        error_state = {"status": "failed", "error": str(e)}
-        redis_client.setex(f"eda_job:{job_id}", 3600, json.dumps(error_state))
+    return {
+        "job_id": str(job_id),
+        "status": "queued",
+        "message": "Gerber generation queued",
+        "links": {
+            "self": f"/api/v1/ai/jobs/{job_id}",
+        },
+    }
 
 
-@router.get("/job/{job_id}")
-async def get_job_status(job_id: str):
-    """Check status of an async job."""
-    job_raw = redis_client.get(f"eda_job:{job_id}")
-    if not job_raw:
+@router.get("/job/{job_id}", response_model=JobResponse)
+async def get_job_status(
+    job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check status of an async job from database."""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return {"job_id": job_id, **json.loads(job_raw)}
+    if job.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return JobResponse.model_validate(job)
 
 
 # ━━ Component Search ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

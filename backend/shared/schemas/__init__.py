@@ -235,6 +235,16 @@ class IntentRequest(BaseModel):
 
 # ━━ PCB Generation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+class PCBGenerationOptions(BaseModel):
+    """Options for PCB generation."""
+    multi_candidate: bool = False
+    num_candidates: int = Field(default=3, ge=1, le=5)
+    enable_explainability: bool = True
+    target_manufacturer: str = "JLCPCB Standard"
+    ipc_class: str = "Class 2"
+    prioritize: str = "balanced"  # "cost", "performance", "density", "balanced"
+
+
 class PCBGenerateRequest(BaseModel):
     """Request to generate a complete PCB design."""
     input_type: str = Field(description="text, bom_netlist, existing_design")
@@ -254,6 +264,7 @@ class PCBGenerateRequest(BaseModel):
     board_config: Optional[BoardConfig] = None
     auto_route: bool = True
     generate_3d_model: bool = True
+    options: Optional[PCBGenerationOptions] = None
 
 
 class PCBGenerateResponse(BaseModel):
@@ -384,3 +395,150 @@ class JobStatusResponse(BaseModel):
     progress: Optional[float] = None
     result: Optional[dict] = None
     error: Optional[str] = None
+
+
+class DRCViolationDetail(BaseModel):
+    rule_id: str
+    rule_name: str
+    category: str
+    severity: str
+    message: str
+    location: dict
+    affected_nets: list[str] = []
+    measured_value: Optional[float] = None
+    required_value: Optional[float] = None
+    unit: str = "mm"
+    suggestion: str = ""
+    ipc_reference: str = ""
+    fix_strategy: str = ""
+
+
+class DRCReport(BaseModel):
+    passed: bool
+    score: float
+    violations: list[DRCViolationDetail] = []
+    summary: dict = {}
+    ipc_compliance: dict = {}
+
+
+class DFMReport(BaseModel):
+    passed: bool
+    score: float
+    fabrication_issues: list[DRCViolationDetail] = []
+    assembly_issues: list[DRCViolationDetail] = []
+    copper_balance: dict = {}
+    test_point_coverage: float = 0.0
+    summary: dict = {}
+    manufacturer_recommendations: list[str] = []
+
+
+class SIReport(BaseModel):
+    passed: bool
+    score: float
+    impedance_issues: list[DRCViolationDetail] = []
+    length_mismatch_issues: list[DRCViolationDetail] = []
+    crosstalk_issues: list[DRCViolationDetail] = []
+    return_path_issues: list[DRCViolationDetail] = []
+    high_speed_nets: list[dict] = []
+    summary: dict = {}
+
+
+class ValidationReport(BaseModel):
+    drc: DRCReport
+    dfm: DFMReport
+    si: SIReport
+    overall_score: float
+    ready_for_fab: bool
+    critical_issues: list[str] = []
+    warnings: list[str] = []
+    recommendations: list[str] = []
+
+
+class CandidateMetricsResponse(BaseModel):
+    routing_completion: float
+    drc_score: float
+    drc_violations: int
+    drc_critical: int
+    drc_warnings: int
+    dfm_score: float
+    si_score: float
+    thermal_score: float
+    overall_score: float
+    via_count: int
+    total_trace_length_mm: float
+    board_area_utilization: float
+    manufacturing_cost_estimate_usd: float
+    estimated_cleanup_time_min: float
+
+
+class LayoutCandidateResponse(BaseModel):
+    candidate_id: str
+    metrics: CandidateMetricsResponse
+    rank: int
+    selected: bool
+    reasoning: str
+    differences_from_best: list[str]
+
+
+class ExplanationResponse(BaseModel):
+    overall_reasoning: str
+    design_philosophy: str
+    critical_choices: list[dict]
+    risk_assessment: dict
+    optimization_notes: list[str]
+    decisions: list[dict]
+
+
+class JobResponse(BaseModel):
+    id: uuid.UUID
+    job_type: str
+    status: str
+    progress: float
+    stage: Optional[str] = None
+    retries: int
+    max_retries: int
+    input_data: dict
+    output_data: Optional[dict] = None
+    error_message: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class IdempotencyConflictResponse(BaseModel):
+    error_code: str = "IDEMPOTENCY_CONFLICT"
+    message: str
+    details: str
+    suggestion: str = "Use a new idempotency key if this is a different request."
+
+
+class RateLimitResponse(BaseModel):
+    error_code: str = "RATE_LIMIT_EXCEEDED"
+    message: str
+    details: str
+    suggestion: str = "Wait before retrying or upgrade your plan."
+    retry_after: int
+
+
+class ValidationErrorDetail(BaseModel):
+    field: str
+    issue: str
+    constraint: Optional[str] = None
+    suggestion: Optional[str] = None
+
+
+class ValidationErrorResponse(BaseModel):
+    error_code: str = "VALIDATION_ERROR"
+    message: str
+    details: list[ValidationErrorDetail]
+    suggestion: str = "Review and correct the listed fields before resubmitting."
+
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str
+    timestamp: datetime
+    checks: dict

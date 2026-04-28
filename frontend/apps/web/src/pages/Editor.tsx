@@ -15,7 +15,7 @@ import {
   PropertyPanel,
   getComponentProperties,
 } from '../components/editor';
-import { apiClient } from '../lib/api/client';
+// api is used in loadDesign via apiClient methods below
 
 // View modes
 type ViewMode = '2d' | '3d' | 'split';
@@ -44,8 +44,8 @@ interface ComponentData {
 
 interface PCBDesign {
   id: string;
-  width_mm: number;
-  height_mm: number;
+  width: number;
+  height: number;
   layers: number;
   components?: ComponentData[];
 }
@@ -79,18 +79,19 @@ export function Editor() {
   const loadDesign = async (id: string) => {
     setLoading(true);
     try {
-      const res = await apiClient.get(`/api/v1/designs/${id}`);
-      if (res.data) {
+      const res = await fetch(`/api/v1/designs/${id}`);
+      if (res.ok) {
+        const data = await res.json();
         setDesign({
-          id: res.data.id,
-          width_mm: res.data.board_config?.width_mm || 100,
-          height_mm: res.data.board_config?.height_mm || 80,
-          layers: res.data.board_config?.layers || 2,
+          id: data.id,
+          width: data.board_config?.width_mm || 100,
+          height: data.board_config?.height_mm || 80,
+          layers: data.board_config?.layers || 2,
         });
-        setPcbLayout(res.data.pcb_layout);
+        setPcbLayout(data.pcb_layout);
       }
     } catch (err) {
-      console.error('Failed to load design:', err);
+      console.warn('Could not load design from backend, using demo data:', err);
     } finally {
       setLoading(false);
     }
@@ -109,8 +110,8 @@ export function Editor() {
   // Build data for ThreeDViewer
   const viewerData = {
     board_config: design ? {
-      width_mm: design.width_mm,
-      height_mm: design.height_mm,
+      width_mm: design.width,
+      height_mm: design.height,
       layers: design.layers,
     } : undefined,
     placed_components: pcbLayout?.placed_components || [],
@@ -121,8 +122,8 @@ export function Editor() {
   // Demo design when no design loaded
   const demoDesign: PCBDesign = {
     id: 'demo',
-    width_mm: 50,
-    height_mm: 50,
+    width: 50,
+    height: 50,
     layers: 4,
     components: [
       { id: 'U1', name: 'ESP32', footprint: 'QFN-48', x: 0, y: 0, rotation: 0 },
@@ -147,7 +148,7 @@ export function Editor() {
           <h1 className="editor-title">
             {loading ? 'Loading...' : 
              designId === 'new' ? 'New Project' : 
-             design ? `PCB ${design.width_mm}×${design.height_mm}mm` : 
+             design ? `PCB ${design.width}×${design.height}mm` : 
              `Project ${projectId}`}
           </h1>
         </div>
@@ -245,7 +246,7 @@ export function Editor() {
         <main className="editor-canvas">
           {viewMode === '2d' && (
             <PCBCanvas
-              design={displayDesign}
+              design={{ ...displayDesign, components: displayDesign.components || [] }}
             />
           )}
           {viewMode === '3d' && (
@@ -254,7 +255,7 @@ export function Editor() {
           {viewMode === 'split' && (
             <div className="split-view">
               <PCBCanvas
-                design={displayDesign}
+                design={{ ...displayDesign, components: displayDesign.components || [] }}
               />
               <ThreeDViewer data={viewerData} />
             </div>

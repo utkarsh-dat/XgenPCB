@@ -18,8 +18,6 @@ from shared.config import get_settings
 from shared.database import get_db
 from shared.models import User
 
-import bcrypt
-
 settings = get_settings()
 security = HTTPBearer()
 

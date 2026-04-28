@@ -1,24 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAIStore, useDesignStore } from '../../stores';
 import { api } from '../../lib/api/client';
+import { AlertCircle } from 'lucide-react';
 
 interface ChatInterfaceProps {
   designId: string;
 }
 
-// Fallback responses when backend unavailable
-const FALLBACK_RESPONSES: Record<string, string> = {
-  'place': "I'll place the component for you. I recommend positioning it near the power section for optimal routing. Shall I proceed with the suggested coordinates?",
-  'route': "I can auto-route that net. The optimal strategy for this trace is to use a 0.25mm width on F.Cu with a single via transition to B.Cu near pin 4. Want me to execute this?",
-  'drc': "Running DRC... ✅ All checks passed! No clearance violations, trace widths are within spec, and impedance targets are met for all high-speed nets.",
-  'review': "**Design Review Summary:**\n\n📊 Overall Score: **87/100**\n\n✅ Schematic: Complete, good decoupling\n⚠️ Placement: Consider moving U2 closer to U1 for shorter power traces\n✅ Routing: Clean signal integrity\n💡 Suggestion: Add thermal relief pads on GND connections",
-  'fix': "I found 2 potential improvements:\n1. **Clearance**: Increase spacing between R1 and R2 by 0.2mm\n2. **Thermal**: Add copper pour on B.Cu under U1 for heat dissipation\n\nShall I apply these fixes?",
-};
-
 export function ChatInterface({ designId }: ChatInterfaceProps) {
   const { messages, isProcessing, addMessage, setProcessing } = useAIStore();
   const { currentDesign } = useDesignStore();
   const [input, setInput] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -26,25 +19,19 @@ export function ChatInterface({ designId }: ChatInterfaceProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const getFallbackResponse = (text: string): string => {
-    const key = Object.keys(FALLBACK_RESPONSES).find((k) => text.toLowerCase().includes(k)) || '';
-    if (key) return FALLBACK_RESPONSES[key];
-    return `I understand you want to "${text}". Let me analyze your current design and suggest the best approach. What specific aspect would you like me to help with?`;
-  };
-
   const sendMessage = async (text: string) => {
     if (!text.trim() || isProcessing) return;
 
     addMessage({ role: 'user', content: text });
     setInput('');
     setProcessing(true);
+    setError(null);
 
     if (textareaRef.current) {
       textareaRef.current.style.height = '20px';
     }
 
     try {
-      // Try to call the backend API
       const response = await api.chat({
         design_id: designId,
         message: text,
@@ -60,12 +47,11 @@ export function ChatInterface({ designId }: ChatInterfaceProps) {
         content: response.message || 'Got it! Let me know if you need anything else.',
         actions: response.actions,
       });
-    } catch (error) {
-      console.warn('Chat API unavailable, using fallback:', error);
-      // Fallback response
+    } catch (err: any) {
+      setError(err.message || 'Failed to get response. Please try again.');
       addMessage({
         role: 'assistant',
-        content: getFallbackResponse(text),
+        content: 'Sorry, I encountered an error processing your request. Please try again.',
       });
     } finally {
       setProcessing(false);
@@ -127,6 +113,14 @@ export function ChatInterface({ designId }: ChatInterfaceProps) {
                 <span></span>
                 <span></span>
               </span>
+            </div>
+          </div>
+        )}
+        {error && (
+          <div className="chat-message chat-message--error">
+            <div className="chat-message__avatar"><AlertCircle className="h-4 w-4" /></div>
+            <div className="chat-message__content">
+              <p className="text-red-500">{error}</p>
             </div>
           </div>
         )}

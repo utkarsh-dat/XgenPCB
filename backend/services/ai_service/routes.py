@@ -13,21 +13,25 @@ import os
 import tempfile
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 import httpx
 import asyncio
 import redis.asyncio as redis
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-
 from shared.config import get_settings
 from shared.database import get_db
 from shared.middleware.auth import get_current_user
+from shared.middleware.rate_limit import limiter
+from shared.models import Job
+from shared.schemas import JobResponse, PaginatedResponse
 from shared.models import AIGeneration, Design, Project, User
 from shared.schemas import (
     AutoFixRequest,
@@ -574,334 +578,137 @@ async def update_job_status(job_id: str, update: dict):
 
 
 @router.post("/generate-pcb")
+@limiter.limit("5/minute")
 async def generate_pcb(
-    request: PCBGenerateRequest,
-    background_tasks: BackgroundTasks,
+    request: Request,
+    body: PCBGenerateRequest,
     x_nvidia_api_key: Optional[str] = Header(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate a complete PCB design - processes in background."""
-    import time
-    
-    if request.input_type not in ["text", "bom_netlist", "existing_design"]:
+    """Generate a complete PCB design - queued as Celery task."""
+    if body.input_type not in ["text", "bom_netlist", "existing_design"]:
         raise HTTPException(status_code=400, detail="Invalid input_type")
-    
-    job_id = str(uuid.uuid4())
+
+    job_id = uuid.uuid4()
     request_data = {
-        "input_type": request.input_type,
-        "description": request.description,
-        "components": request.components,
-        "nets": request.nets,
-        "file_type": request.file_type,
-        "file_url": request.file_url,
-        "board_config": request.board_config.model_dump() if request.board_config else {},
+        "input_type": body.input_type,
+        "description": body.description,
+        "components": body.components,
+        "nets": body.nets,
+        "file_type": body.file_type,
+        "file_url": body.file_url,
+        "board_config": body.board_config.model_dump() if body.board_config else {},
         "user_id": str(current_user.id),
     }
-    
-    await update_job_status(job_id, {
+
+    # Persist job in database
+    job = Job(
+        id=job_id,
+        user_id=current_user.id,
+        job_type="pcb_generation",
+        status="queued",
+        progress=0.0,
+        input_data=request_data,
+        stage="queued",
+        retries=0,
+        max_retries=3,
+    )
+    db.add(job)
+    await db.commit()
+
+    # Queue Celery task
+    from services.ai_service.tasks import generate_pcb_task
+    generate_pcb_task.delay(str(job_id), request_data, str(current_user.id), x_nvidia_api_key)
+
+    return {
+        "job_id": str(job_id),
         "status": "queued",
-        "progress": 0.0,
-        "request": request_data,
-    })
-    
-    background_tasks.add_task(_generate_pcb_task, job_id, request_data, current_user.id, x_nvidia_api_key)
-    
-    return {"job_id": job_id, "status": "queued", "message": "PCB generation started"}
+        "message": "PCB generation queued",
+        "links": {
+            "self": f"/api/v1/ai/jobs/{job_id}",
+            "cancel": f"/api/v1/ai/jobs/{job_id}/cancel",
+        },
+    }
 
 
-@router.get("/generate-pcb/{job_id}")
-async def get_generate_pcb_status(job_id: str):
-    """Check status of PCB generation job from Redis."""
-    job_data = await redis_client.get(f"job:{job_id}")
-    if not job_data:
+@router.get("/jobs", response_model=PaginatedResponse)
+async def list_jobs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List user's jobs."""
+    from sqlalchemy import func
+
+    query = select(Job).where(Job.user_id == current_user.id)
+    if status:
+        query = query.where(Job.status == status)
+    query = query.order_by(Job.created_at.desc())
+
+    # Count total
+    count_query = select(func.count()).select_from(query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar_one()
+
+    # Paginate
+    offset = (page - 1) * page_size
+    query = query.offset(offset).limit(page_size)
+    result = await db.execute(query)
+    jobs = result.scalars().all()
+
+    return {
+        "items": [JobResponse.model_validate(j).model_dump() for j in jobs],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_next": offset + len(jobs) < total,
+    }
+
+
+@router.get("/jobs/{job_id}", response_model=JobResponse)
+async def get_job_status(
+    job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get job status from database (primary source of truth)."""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return json.loads(job_data)
+    if job.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return JobResponse.model_validate(job)
 
 
-async def _generate_pcb_task(job_id: str, request_data: dict, user_id: uuid.UUID, api_key: Optional[str] = None):
-    """Background task for PCB generation with real KiCad validation + retry."""
-    from sqlalchemy import select
-    
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(
+    job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel a queued or running job."""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if job.status not in ["queued", "running"]:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel job with status '{job.status}'")
+
+    job.status = "cancelled"
+    job.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    # Also revoke Celery task if possible
     try:
-        await update_job_status(job_id, {"status": "processing", "progress": 0.1})
-        
-        input_type = request_data["input_type"]
-        
-        if input_type == "text":
-            user_message = f"""Generate a complete PCB design for this description:
-{request_data.get('description', '')}
+        from shared.celery_app import celery_app
+        celery_app.control.revoke(str(job_id), terminate=True)
+    except Exception:
+        pass
 
-Board config:
-{json.dumps(request_data.get('board_config', {}), indent=2)}"""
-        
-        elif input_type == "bom_netlist":
-            component_list = json.dumps(request_data.get("components", []), indent=2)
-            net_list = json.dumps(request_data.get("nets", []), indent=2)
-            user_message = f"""Generate a complete PCB design from BOM and netlist:
-
-Components:
-{component_list}
-
-Netlist:
-{net_list}
-
-Board config:
-{json.dumps(request_data.get('board_config', {}), indent=2)}"""
-        
-        else:
-            user_message = f"""Convert existing design:
-File type: {request_data.get('file_type')}
-File URL: {request_data.get('file_url', 'content to be provided')}
-
-Board config:
-{json.dumps(request_data.get('board_config', {}), indent=2)}"""
-        
-        await update_job_status(job_id, {"progress": 0.2})
-        
-        # ── Initialize AI Context ────────────────────────────
-        messages = [
-            {"role": "system", "content": PCB_GENERATION_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message}
-        ]
-        actual_api_key = api_key or settings.nvidia_api_key
-        # ──────────────────────────────────────────────────
-        
-        MAX_RETRIES = 5
-        design_data = None
-        last_validation = {"valid": False, "errors": []}
-        last_drc_errors = []
-        import traceback
-        
-        for attempt in range(MAX_RETRIES + 1):
-            print(f"LLM attempt {attempt + 1}/{MAX_RETRIES + 1} for job {job_id}...")
-            
-            # If this is a retry, append feedback to the conversation history
-            if attempt > 0:
-                feedback = "Previous attempt had issues:\n"
-                if not last_validation.get("valid"):
-                    feedback += f"Format Errors: {last_validation.get('errors', [])}\n"
-                if last_drc_errors:
-                    feedback += "DRC Violations (Fix these by moving components or adjusting traces!):\n"
-                    for v in last_drc_errors:
-                        feedback += f"- {v['type']}: {v['message']} at {v.get('location')}\n"
-                
-                feedback += "\nRe-generate a COMPLETE PCB with all components, nets, and tracks, fixing the above issues."
-                messages.append({"role": "user", "content": feedback})
-                
-                await update_job_status(job_id, {"status": "self_correcting", "message": f"Retry {attempt}/5: Resolving violations..."})
-            
-            try:
-                # ── Neural Streaming Engine ──────────────────────
-                full_response = ""
-                reasoning_captured = False
-                in_reasoning_block = False
-                
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    async with client.stream(
-                        "POST",
-                        f"{settings.nvidia_base_url}/chat/completions",
-                        json={
-                            "model": settings.nvidia_model,
-                            "messages": messages,
-                            "temperature": 0.1,
-                            "max_tokens": 4096,
-                            "stream": True,
-                            "response_format": {"type": "json_object"}
-                        },
-                        headers={
-                            "Authorization": f"Bearer {actual_api_key}",
-                            "Accept": "text/event-stream"
-                        }
-                    ) as response:
-                        print(f"DEBUG: NVIDIA Stream Response Status: {response.status_code}")
-                        async for line in response.aiter_lines():
-                            if line.startswith("data: ") and not line.endswith("[DONE]"):
-                                try:
-                                    chunk = json.loads(line[6:])
-                                    content = chunk["choices"][0]["delta"].get("content", "")
-                                    full_response += content
-                                    
-                                    # ── Single-Use Precision Catcher ──────────────
-                                    if not reasoning_captured:
-                                        if not in_reasoning_block:
-                                            # Look for the start of the reasoning field
-                                            if '"design_reasoning"' in full_response and '"' in full_response.split('"design_reasoning"')[-1].split(':')[-1]:
-                                                in_reasoning_block = True
-                                                print(f"DEBUG: [REASONING STARTED]")
-                                                # Send only the part that is actually reasoning
-                                                initial_part = full_response.split('"design_reasoning"')[-1].split('"')[-1]
-                                                if initial_part:
-                                                    await update_job_status(job_id, {"design_reasoning_delta": initial_part})
-                                        else:
-                                            # We are streaming reasoning. Stop if we hit the end.
-                                            if '",' in full_response or '"}' in full_response:
-                                                in_reasoning_block = False
-                                                reasoning_captured = True # LOCK THE DOOR FOREVER
-                                                print(f"DEBUG: [REASONING FINISHED]")
-                                                if '",' in content: content = content.split('",')[0]
-                                                elif '"}' in content: content = content.split('"}')[0]
-                                                elif '"' in content: content = content.split('"')[0]
-                                            
-                                            if (in_reasoning_block or content) and content.strip() not in ['":', '']:
-                                                await update_job_status(job_id, {"design_reasoning_delta": content})
-                                    # ──────────────────────────────────────────────
-                                except:
-                                    continue
-                
-                raw_content = full_response
-                print(f"DEBUG: FULL AI RESPONSE (first 500 chars):\n{raw_content[:500]}")
-                print(f"DEBUG: FULL AI RESPONSE (last 500 chars):\n{raw_content[-500:]}")
-                
-                # ── Robust JSON Extraction ──────────────────────────
-                start_idx = raw_content.find("{")
-                end_idx = raw_content.rfind("}")
-                
-                if start_idx != -1 and end_idx != -1:
-                    json_str = raw_content[start_idx:end_idx + 1]
-                    design_data = json.loads(json_str)
-                    
-                    # 🔍 Aggressive Validation
-                    found_keys = list(design_data.keys())
-                    print(f"DEBUG: Parsed JSON keys: {found_keys}")
-                    
-                    if not any(k in design_data for k in ["board_config", "placed_components", "pcb_layout", "components"]):
-                        print(f"DEBUG: Rejected minimal/empty JSON. Found keys: {found_keys}")
-                        design_data = {}
-                    else:
-                        print(f"DEBUG: Successfully validated design data structure.")
-                        # ── Cement Reasoning in Status ──────────────────
-                        reasoning = design_data.get("design_reasoning", "")
-                        if reasoning:
-                            await update_job_status(job_id, {
-                                "message": "Strategy finalized.",
-                                "design_reasoning": reasoning
-                            })
-                        # ──────────────────────────────────────────────
-                else:
-                    design_data = {}
-            except json.JSONDecodeError as e:
-                print(f"JSON parse error: {e}")
-                last_validation = {"valid": False, "errors": [f"Invalid JSON: {e}"]}
-                if attempt == MAX_RETRIES:
-                    await update_job_status(job_id, {
-                        "status": "failed",
-                        "error": "Failed to generate valid PCB after multiple attempts.",
-                    })
-                    return
-                continue
-            print(f"Validation (attempt {attempt + 1}): valid={last_validation['valid']}, errors={last_validation['errors']}")
-            
-            if last_validation["valid"]:
-                # Run Real KiCad DRC check
-                await update_job_status(job_id, {"status": "verifying", "message": "Running deterministic KiCad DRC..."})
-                
-                from services.eda_service.routes import run_drc
-                from shared.schemas import DRCRequest
-                
-                drc_result = await run_drc(DRCRequest(design_data=design_data))
-                last_drc_errors = [v for v in drc_result.violations if v.get("severity") == "error"]
-                
-                if not last_drc_errors:
-                    await update_job_status(job_id, {"status": "verified", "message": "DRC Passed! Finalizing design..."})
-                    break
-                else:
-                    # Append DRC errors to history for next attempt
-                    error_msg = f"Your last design had DRC errors: {', '.join([e['message'] for e in last_drc_errors[:3]])}. Please FIX these in your next JSON output."
-                    messages.append({"role": "assistant", "content": raw_content})
-                    messages.append({"role": "user", "content": error_msg})
-                    await update_job_status(job_id, {"status": "violating", "message": f"Found {len(last_drc_errors)} DRC violations. Auto-fixing..."})
-            else:
-                # Append Validation errors to history for next attempt
-                error_msg = f"Your last JSON was invalid: {', '.join(last_validation['errors'])}. Please provide a FULL industrial-grade board design."
-                messages.append({"role": "assistant", "content": raw_content})
-                messages.append({"role": "user", "content": error_msg})
-            
-            if attempt == MAX_RETRIES:
-                print(f"Failed after {MAX_RETRIES + 1} attempts")
-                await update_job_status(job_id, {
-                    "status": "failed",
-                    "error": "Generation incomplete after max retries",
-                    "validation_errors": last_validation["errors"],
-                    "partial_data": design_data,
-                })
-                return
-        
-        if not design_data or not last_validation.get("valid") or last_drc_errors:
-            await update_job_status(job_id, {
-                "status": "failed",
-                "error": "No valid design data or DRC constraints failed after all attempts",
-            })
-            return
-        
-        await update_job_status(job_id, {"progress": 0.6})
-        
-        board_cfg = design_data.get("board_config", {})
-        bc = request_data.get("board_config", {})
-        for k, v in bc.items():
-            if v is not None:
-                board_cfg[k] = v
-        design_data["board_config"] = board_cfg
-        
-        drc_rules = design_data.get("drc_rules", {})
-        
-        from shared.database import async_session_factory
-        
-        async with async_session_factory() as db:
-            result_proj = await db.execute(
-                select(Project).where(Project.created_by == user_id).order_by(Project.created_at.desc())
-            )
-            project = result_proj.scalar_one_or_none()
-            if not project:
-                project = Project(name="AI Generated", created_by=user_id)
-                db.add(project)
-                await db.flush()
-            
-            design = Design(
-                name=f"PCB {int(time.time())}",
-                project_id=project.id,
-                board_config=board_cfg,
-                schematic_data={"components": design_data.get("placed_components", []), "nets": design_data.get("nets", [])},
-                design_reasoning=design_data.get("design_reasoning", "No reasoning provided."),
-                pcb_layout={
-                    "placed_components": design_data.get("placed_components", []),
-                    "tracks": design_data.get("tracks", []),
-                    "vias": design_data.get("vias", []),
-                },
-                created_by=user_id,
-                status="generated",
-            )
-            db.add(design)
-            await db.commit()
-            await db.refresh(design)
-            
-            from services.storage_service import storage_service
-            
-            with tempfile.TemporaryDirectory() as tmpdir:
-                project_path = Path(tmpdir) / "design"
-                project_path.mkdir()
-                from services.eda_service.routes import write_kicad_board
-                kicad_path = write_kicad_board(project_path, board_cfg, design.pcb_layout)
-                content = kicad_path.read_text()
-                filename = f"{design.name}.kicad_pcb"
-                storage_result = await storage_service.upload_dual(design.id, filename, content.encode("utf-8"), "application/octet-stream")
-                design.local_path = storage_result["local_path"]
-                design.minio_key = storage_result.get("minio_key")
-                await db.commit()
-            
-            await update_job_status(job_id, {
-                "status": "completed",
-                "progress": 1.0,
-                "design_id": str(design.id),
-                "tokens_used": result.get("tokens", 0),
-            })
-    
-    except Exception as e:
-        import traceback
-        error_msg = f"{str(e)}\n{traceback.format_exc()}"
-        print(f"ERROR in _generate_pcb_task: {error_msg}")
-        await update_job_status(job_id, {
-            "status": "failed",
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-        })
+    return {"job_id": str(job_id), "status": "cancelled"}
