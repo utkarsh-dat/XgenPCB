@@ -26,15 +26,34 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load projects from API
+  // Track where projects are loaded from (Cloud or Local filesystem)
+  const [projectSource, setProjectSource] = useState<'cloud' | 'local'>(
+    (typeof window !== 'undefined' && window.electronAPI) ? 'local' : 'cloud'
+  );
+
+  // Load projects from API or Local storage
   useEffect(() => {
     async function loadProjects() {
       setLoading(true);
       setError(null);
       try {
-        const data = await api.listProjects() as { items: Project[] };
-        if (data.items) {
-          setProjects(data.items);
+        if (projectSource === 'local' && window.electronAPI) {
+          const localProjects = await window.electronAPI.listProjects();
+          const mapped = localProjects.map((lp: any) => ({
+            id: lp.id,
+            name: lp.name,
+            description: lp.description,
+            tags: lp.tags || ['Local Drive'],
+            visibility: 'private',
+            created_at: lp.updatedAt,
+            updated_at: lp.updatedAt,
+          }));
+          setProjects(mapped);
+        } else {
+          const data = await api.listProjects() as { items: Project[] };
+          if (data.items) {
+            setProjects(data.items);
+          }
         }
       } catch (err: any) {
         setError(err.message || 'Failed to load projects. Please try again.');
@@ -43,7 +62,7 @@ export function Dashboard() {
       }
     }
     loadProjects();
-  }, [setProjects]);
+  }, [setProjects, projectSource]);
 
   const filteredProjects = projects.filter(
     (p) =>
@@ -56,7 +75,12 @@ export function Dashboard() {
   };
 
   const handleNewProject = () => {
-    navigate('/editor/new/design-1');
+    if (projectSource === 'local') {
+      const localId = `local-${Date.now()}`;
+      navigate(`/editor/${localId}/design-1`);
+    } else {
+      navigate('/editor/new/design-1');
+    }
   };
 
   const [aiPrompt, setAiPrompt] = useState('');
@@ -113,18 +137,18 @@ export function Dashboard() {
   return (
     <div style={{ minHeight: '100vh', background: 'var(--color-canvas)' }}>
       {/* ── Top Nav ─────────────────────────────────────── */}
-      <nav style={{
+      <nav className="electron-drag" style={{
         height: 64, background: 'var(--color-canvas)',
         borderBottom: '1px solid var(--color-hairline)',
         display: 'flex', alignItems: 'center',
         padding: '0 32px', gap: 24, position: 'sticky', top: 0, zIndex: 50,
       }}>
-        <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
+        <Link className="electron-no-drag" to="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
           <span style={{ fontSize: 18 }}>✦</span>
           <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: 18, color: 'var(--color-ink)' }}>XgenPCB</span>
         </Link>
 
-        <div style={{ display: 'flex', gap: 2, marginLeft: 24 }}>
+        <div className="electron-no-drag" style={{ display: 'flex', gap: 2, marginLeft: 24 }}>
           <button style={{
             padding: '8px 14px', fontSize: 14, fontWeight: 500, fontFamily: 'var(--font-sans)',
             color: 'var(--color-ink)', background: 'var(--color-surface-card)',
@@ -142,7 +166,7 @@ export function Dashboard() {
           }}>Templates</button>
         </div>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div className="electron-no-drag" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
           <button className="btn btn--primary btn--sm" onClick={handleNewProject}>
             <Plus size={14} /> New Project
           </button>
@@ -289,6 +313,55 @@ export function Dashboard() {
             </div>
           </div>
         </div>
+
+        {/* ── Storage Selector (Electron only) ── */}
+        {typeof window !== 'undefined' && window.electronAPI && (
+          <div style={{
+            display: 'flex',
+            gap: 8,
+            marginBottom: 24,
+            padding: 4,
+            background: 'var(--color-surface-card)',
+            border: '1px solid var(--color-hairline)',
+            borderRadius: 8,
+            width: 'fit-content'
+          }}>
+            <button
+              onClick={() => setProjectSource('local')}
+              style={{
+                padding: '8px 16px',
+                fontSize: 13,
+                fontWeight: 600,
+                borderRadius: 6,
+                border: 'none',
+                cursor: 'pointer',
+                background: projectSource === 'local' ? 'var(--color-primary)' : 'transparent',
+                color: projectSource === 'local' ? '#ffffff' : 'var(--color-muted)',
+                transition: 'all 0.2s',
+                fontFamily: 'var(--font-sans)',
+              }}
+            >
+              💻 Local Drive
+            </button>
+            <button
+              onClick={() => setProjectSource('cloud')}
+              style={{
+                padding: '8px 16px',
+                fontSize: 13,
+                fontWeight: 600,
+                borderRadius: 6,
+                border: 'none',
+                cursor: 'pointer',
+                background: projectSource === 'cloud' ? 'var(--color-primary)' : 'transparent',
+                color: projectSource === 'cloud' ? '#ffffff' : 'var(--color-muted)',
+                transition: 'all 0.2s',
+                fontFamily: 'var(--font-sans)',
+              }}
+            >
+              ☁ Cloud Projects
+            </button>
+          </div>
+        )}
 
         {/* ── Toolbar ──────────────────────────────────── */}
         <div style={{

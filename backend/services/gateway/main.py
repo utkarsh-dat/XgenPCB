@@ -112,6 +112,18 @@ async def health_check():
     return {"status": "healthy", "environment": settings.app_env}
 
 
+@app.get("/metrics", tags=["Monitoring"])
+async def metrics():
+    """Prometheus metrics endpoint."""
+    from fastapi import Response
+    content = (
+        "# HELP xgenpcb_backend_up Active state\n"
+        "# TYPE xgenpcb_backend_up gauge\n"
+        "xgenpcb_backend_up 1.0\n"
+    )
+    return Response(content=content, media_type="text/plain")
+
+
 @app.get("/health/live", tags=["Health"])
 async def liveness_probe():
     """Liveness probe - is the service running?"""

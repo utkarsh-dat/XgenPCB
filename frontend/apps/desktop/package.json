@@ -1,0 +1,43 @@
+{
+  "name": "pcb-builder-desktop",
+  "version": "0.1.0",
+  "description": "World-Class Autonomous PCB Builder with AI-powered design assistance",
+  "main": "src/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder"
+  },
+  "dependencies": {
+    "7zip-bin": "^5.2.0",
+    "electron-is-dev": "^3.0.1"
+  },
+  "devDependencies": {
+    "electron": "^33.0.2",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "electronVersion": "33.0.2",
+    "appId": "com.xgenpcb.builder",
+    "productName": "XgenPCB Builder",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "../web/dist/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}

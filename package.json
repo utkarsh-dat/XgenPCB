@@ -9,9 +9,12 @@
   ],
   "scripts": {
     "dev:frontend": "cd frontend/apps/web && npm run dev",
-    "dev:backend": "docker-compose up -d && cd backend && make dev",
+    "dev:backend": "docker compose up -d && cd backend && make dev",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "build:frontend": "cd frontend/apps/web && npm run build",
+    "dev:desktop": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev -w pcb-builder-desktop\"",
+    "desktop": "concurrently \"npm run dev:frontend\" \"npm run dev -w pcb-builder-desktop\"",
+    "build:desktop": "npm run build:frontend && npm run build -w pcb-builder-desktop",
     "db:migrate": "cd backend && python -m scripts.migrate",
     "db:seed": "cd backend && python -m scripts.seed",
     "test:backend": "cd backend && pytest",
@@ -19,6 +22,10 @@
     "lint": "concurrently \"cd backend && ruff check .\" \"cd frontend/apps/web && npm run lint\""
   },
   "devDependencies": {
+    "7zip-bin": "^5.2.0",
     "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "app-builder-bin": "^4.2.0"
   }
 }

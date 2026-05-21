@@ -5,7 +5,12 @@
 
 import type { Project } from '../../stores';
 
-const API_BASE = '/api/v1';
+import { API_CONFIG } from './config';
+
+const API_BASE = (typeof window !== 'undefined' && (window.electronAPI || window.location.protocol === 'file:'))
+  ? 'http://localhost:8000/api/v1'
+  : '/api/v1';
+
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 

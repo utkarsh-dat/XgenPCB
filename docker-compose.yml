@@ -115,6 +115,9 @@ services:
         condition: service_healthy
     networks:
       - xgenpcb-network
+    healthcheck:
+      disable: true
+
 
   # ── Celery Worker (EDA) ─────────────────────────────────────
   celery-worker-eda:
@@ -142,6 +145,8 @@ services:
         condition: service_healthy
     networks:
       - xgenpcb-network
+    healthcheck:
+      disable: true
 
   # ── Celery Beat (Scheduler) ─────────────────────────────────
   celery-beat:
@@ -166,6 +171,8 @@ services:
         condition: service_healthy
     networks:
       - xgenpcb-network
+    healthcheck:
+      disable: true
 
   # ── Frontend (Nginx) ────────────────────────────────────────
   frontend:
@@ -182,7 +189,7 @@ services:
     networks:
       - xgenpcb-network
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/health"]
       interval: 30s
       timeout: 10s
       retries: 3

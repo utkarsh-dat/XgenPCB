@@ -535,3 +535,12 @@ a:hover { text-decoration: underline; }
   .ai-features-hint { flex-direction: column; align-items: center; gap: var(--space-sm); }
   .topnav__tabs { display: none; }
 }
+
+/* ── Custom Electron Titlebar ────────────────────────────── */
+.electron-drag {
+  -webkit-app-region: drag;
+}
+.electron-no-drag {
+  -webkit-app-region: no-drag;
+}
+

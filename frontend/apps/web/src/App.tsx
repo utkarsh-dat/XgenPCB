@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Dashboard } from './pages/Dashboard';
 import { Editor } from './pages/Editor';
 import { SchematicEditor } from './pages/SchematicEditor';
@@ -16,7 +16,7 @@ import { LandingPage } from './pages/LandingPage';
 
 function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/dashboard" element={<Dashboard />} />
@@ -34,7 +34,7 @@ function App() {
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 

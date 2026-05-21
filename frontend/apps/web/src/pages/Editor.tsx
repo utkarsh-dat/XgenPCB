@@ -68,6 +68,7 @@ export function Editor() {
   const [design, setDesign] = useState<PCBDesign | null>(null);
   const [pcbLayout, setPcbLayout] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   // Load design on mount
   useEffect(() => {
@@ -79,7 +80,52 @@ export function Editor() {
   const loadDesign = async (id: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/v1/designs/${id}`);
+      if (window.electronAPI && projectId && (projectId.startsWith('local-') || projectId === 'new')) {
+        const localData = await window.electronAPI.getProject(projectId);
+        if (localData) {
+          setDesign({
+            id: localData.id,
+            width: localData.boardConfig?.width_mm || 100,
+            height: localData.boardConfig?.height_mm || 80,
+            layers: localData.boardConfig?.layers || 2,
+          });
+          setPcbLayout(localData.pcbLayout || { placed_components: [], tracks: [], vias: [] });
+          setLoading(false);
+          return;
+        } else {
+          // Initialize a blank local design structure
+          const newLocal = {
+            id: projectId,
+            name: `Project ${projectId.replace('local-', '')}`,
+            description: 'Local Offline Design',
+            boardConfig: {
+              width_mm: 80,
+              height_mm: 60,
+              layers: 2
+            },
+            pcbLayout: {
+              placed_components: [],
+              tracks: [],
+              vias: []
+            }
+          };
+          await window.electronAPI.saveProject(projectId, newLocal);
+          setDesign({
+            id: newLocal.id,
+            width: newLocal.boardConfig.width_mm,
+            height: newLocal.boardConfig.height_mm,
+            layers: newLocal.boardConfig.layers,
+          });
+          setPcbLayout(newLocal.pcbLayout);
+          setLoading(false);
+          return;
+        }
+      }
+
+      const baseUrl = (typeof window !== 'undefined' && (window.electronAPI || window.location.protocol === 'file:'))
+        ? 'http://localhost:8000'
+        : '';
+      const res = await fetch(`${baseUrl}/api/v1/designs/${id}`);
       if (res.ok) {
         const data = await res.json();
         setDesign({
@@ -96,6 +142,62 @@ export function Editor() {
       setLoading(false);
     }
   };
+
+  const handleSave = async () => {
+    if (!projectId) return;
+    setSaving(true);
+    try {
+      if (window.electronAPI && projectId.startsWith('local-')) {
+        const localData = {
+          id: projectId,
+          name: design ? `PCB ${design.width}×${design.height}mm` : 'Untitled Local Project',
+          description: 'Local Offline Design',
+          boardConfig: design ? {
+            width_mm: design.width,
+            height_mm: design.height,
+            layers: design.layers,
+          } : undefined,
+          pcbLayout: pcbLayout || { placed_components: [], tracks: [], vias: [] }
+        };
+        const success = await window.electronAPI.saveProject(projectId, localData);
+        if (success) {
+          alert('Project saved successfully to local drive!');
+        } else {
+          alert('Failed to save project.');
+        }
+      } else {
+        // Cloud project save
+        const baseUrl = (typeof window !== 'undefined' && (window.electronAPI || window.location.protocol === 'file:'))
+          ? 'http://localhost:8000'
+          : '';
+        const res = await fetch(`${baseUrl}/api/v1/projects/${projectId}/designs/${designId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            board_config: design ? {
+              width_mm: design.width,
+              height_mm: design.height,
+              layers: design.layers,
+            } : undefined,
+            pcb_layout: pcbLayout
+          })
+        });
+        if (res.ok) {
+          alert('Project saved successfully to cloud!');
+        } else {
+          alert('Failed to save cloud project.');
+        }
+      }
+    } catch (err) {
+      console.error('Error saving project:', err);
+      alert('Error saving project.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
 
   // Get selected component properties
   const selectedItem = selectedComponentId
@@ -140,8 +242,8 @@ export function Editor() {
   return (
     <div className="editor-layout">
       {/* ── Top Toolbar ────────────────────────────────────── */}
-      <header className="editor-toolbar">
-        <div className="toolbar-left">
+      <header className="editor-toolbar electron-drag">
+        <div className="toolbar-left electron-no-drag">
           <button className="btn btn--ghost" onClick={() => navigate('/')}>
             ← Back
           </button>
@@ -153,7 +255,7 @@ export function Editor() {
           </h1>
         </div>
 
-        <div className="toolbar-center">
+        <div className="toolbar-center electron-no-drag">
           {/* View Mode Toggle */}
           <div className="view-toggle">
             <button
@@ -191,7 +293,7 @@ export function Editor() {
           </div>
         </div>
 
-        <div className="toolbar-right">
+        <div className="toolbar-right electron-no-drag">
           <button
             className={`btn btn--ghost ${showComponents ? 'active' : ''}`}
             onClick={() => setShowComponents(!showComponents)}
@@ -219,6 +321,14 @@ export function Editor() {
             title="AI Chat"
           >
             🤖
+          </button>
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={handleSave}
+            disabled={saving}
+            style={{ marginRight: 8, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            <span>💾</span> {saving ? 'Saving...' : 'Save'}
           </button>
           <button className="btn btn--primary btn--sm">
             Export
